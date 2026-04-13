@@ -1,6 +1,7 @@
 // ============================================================
 //  TopoGest v4 — Gestão de Serviços de Topografia
 //  Dashboard: filtro mensal/anual · gráfico · top clientes
+//  + Tipo personalizado via "Outro"
 // ============================================================
 
 import {
@@ -9,7 +10,7 @@ import {
 import { initializeApp, getApps } from "firebase/app";
 import {
   getFirestore, collection, addDoc, updateDoc,
-  deleteDoc, doc, onSnapshot, serverTimestamp, query, orderBy,
+  deleteDoc, doc, onSnapshot, serverTimestamp, query, orderBy, setDoc, getDoc,
 } from "firebase/firestore";
 
 // ▼▼▼ COLE AQUI OS DADOS DO SEU PROJETO FIREBASE ▼▼▼
@@ -40,6 +41,7 @@ const SERVICE_TYPES = [
   "Levantamento Batimétrico","Retificação de Área",
   "Revisão de Serviço","Outro",
 ];
+
 const STATUS_CONFIG = {
   Aguardando:      { color:"#6b7280", bg:"#1f2937", icon:"⏳" },
   "Em Campo":      { color:"#f59e0b", bg:"#451a03", icon:"📡" },
@@ -284,17 +286,85 @@ function Field({ label, children, full, required }) {
   );
 }
 
-function ServiceForm({ initial, onSave, onClose, saving }) {
+// ─── Campo "Outro" com opção de salvar categoria ──────────
+
+function OutroInput({ onUse, onSave }) {
+  const [val, setVal] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  return(
+    <div style={{marginTop:10,background:"#0a0f1a",
+      border:"1px solid #f59e0b40",borderRadius:10,padding:14}}>
+      <div style={{fontSize:11,color:"#f59e0b",fontFamily:"'Space Mono',monospace",
+        fontWeight:700,marginBottom:8,letterSpacing:"0.05em"}}>
+        DESCREVA O TIPO DE SERVIÇO:
+      </div>
+      <input
+        style={{...inp,marginBottom:10}}
+        placeholder="Ex: Regularização Fundiária"
+        value={val}
+        autoFocus
+        onChange={e=>{ setVal(e.target.value); setSaved(false); }}
+      />
+      <div style={{display:"flex",gap:8}}>
+        <button
+          onClick={()=>val.trim()&&onUse(val.trim())}
+          disabled={!val.trim()}
+          style={{flex:1,padding:"9px 0",
+            background:val.trim()?"#1f2937":"#111827",
+            border:"1px solid #374151",borderRadius:8,
+            color:val.trim()?"#f1f5f9":"#4b5563",fontSize:12,
+            cursor:val.trim()?"pointer":"default",fontWeight:600,
+            fontFamily:"'Space Mono',monospace",transition:"all 0.15s"}}>
+          Usar só agora
+        </button>
+        <button
+          onClick={()=>{ if(val.trim()&&!saved){ onSave(val.trim()); setSaved(true); } }}
+          disabled={!val.trim()||saved}
+          style={{flex:1,padding:"9px 0",
+            background:val.trim()&&!saved
+              ?"linear-gradient(135deg,#d97706,#f59e0b)"
+              :"#1f2937",
+            border:"none",borderRadius:8,
+            color:val.trim()&&!saved?"#000":"#4b5563",fontSize:12,
+            cursor:val.trim()&&!saved?"pointer":"default",fontWeight:700,
+            fontFamily:"'Space Mono',monospace",transition:"all 0.15s"}}>
+          {saved?"✓ Salvo na lista!":"💾 Salvar categoria"}
+        </button>
+      </div>
+      {saved&&(
+        <div style={{fontSize:11,color:"#10b981",marginTop:8,
+          fontFamily:"'Space Mono',monospace",textAlign:"center"}}>
+          ✓ Categoria salva — aparecerá no menu em todos os serviços futuros.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Formulário de Serviço ────────────────────────────────
+
+function ServiceForm({ initial, onSave, onClose, saving, customTypes, onSaveType }) {
   const [form, setForm] = useState(()=>initial||makeEmptyForm());
   const [errors, setErrors] = useState({});
   useEffect(()=>{setForm(initial||makeEmptyForm());setErrors({});},[initial]);
   const set = useCallback((k,v)=>setForm(f=>({...f,[k]:v})),[]);
 
+  // Todos os tipos disponíveis (fixos + salvos pelo usuário)
+  const allTypes = useMemo(()=>{
+    const extras = (customTypes||[]).filter(t=>!SERVICE_TYPES.includes(t));
+    return [...SERVICE_TYPES.filter(t=>t!=="Outro"), ...extras, "Outro"];
+  },[customTypes]);
+
+  // Verifica se o tipo atual é um tipo personalizado não-padrão
+  const isCustomValue = form.type && !SERVICE_TYPES.includes(form.type);
+  const showOutroInput = form.type === "__outro__" || (form.type === "Outro");
+
   const handleSave = () => {
     const e={};
     if(!form.name.trim())e.name="Obrigatório";
     if(!form.client.trim())e.client="Obrigatório";
-    if(!form.type)e.type="Selecione um tipo";
+    if(!form.type||form.type==="Outro"||form.type==="__outro__")e.type="Selecione ou preencha um tipo";
     setErrors(e);
     if(Object.keys(e).length===0)onSave(form);
   };
@@ -319,48 +389,74 @@ function ServiceForm({ initial, onSave, onClose, saving }) {
             placeholder="Ex: Levantamento Fazenda Santa Clara"/>
           {errors.name&&<div style={{fontSize:11,color:"#ef4444",marginTop:3}}>{errors.name}</div>}
         </Field>
+
         <Field label="Cliente" required full>
           <input style={{...inp,borderColor:errors.client?"#ef4444":"#1f2937"}}
             value={form.client} onChange={e=>set("client",e.target.value)}
             placeholder="Nome do cliente ou empresa"/>
           {errors.client&&<div style={{fontSize:11,color:"#ef4444",marginTop:3}}>{errors.client}</div>}
         </Field>
+
         <Field label="Tipo de Serviço" required full>
-          <select style={{...inp,cursor:"pointer",borderColor:errors.type?"#ef4444":"#1f2937"}}
-            value={form.type} onChange={e=>set("type",e.target.value)}>
+          <select
+            style={{...inp,cursor:"pointer",borderColor:errors.type?"#ef4444":"#1f2937"}}
+            value={showOutroInput?"Outro":form.type}
+            onChange={e=>{
+              if(e.target.value==="Outro") set("type","Outro");
+              else set("type",e.target.value);
+            }}>
             <option value="">Selecionar...</option>
-            {SERVICE_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+            {allTypes.map(t=>(
+              <option key={t} value={t}>
+                {t==="Outro"?"+ Outro (digitar novo)":t}
+              </option>
+            ))}
           </select>
           {errors.type&&<div style={{fontSize:11,color:"#ef4444",marginTop:3}}>{errors.type}</div>}
+
+          {/* Caixa de texto quando "Outro" selecionado */}
+          {(form.type==="Outro")&&(
+            <OutroInput
+              onUse={v=>set("type",v)}
+              onSave={v=>{ set("type",v); onSaveType&&onSaveType(v); }}
+            />
+          )}
         </Field>
+
         <Field label="Status">
           <select style={{...inp,cursor:"pointer"}} value={form.status}
             onChange={e=>set("status",e.target.value)}>
             {Object.keys(STATUS_CONFIG).map(s=><option key={s} value={s}>{s}</option>)}
           </select>
         </Field>
+
         <Field label="Área">
           <input style={inp} value={form.area}
             onChange={e=>set("area",e.target.value)} placeholder="Ex: 12,5 ha"/>
         </Field>
+
         <Field label="Data de Início">
           <input style={inp} type="date" value={form.date}
             onChange={e=>set("date",e.target.value)}/>
         </Field>
+
         <Field label="Prazo de Entrega">
           <input style={inp} type="date" value={form.deadline}
             onChange={e=>set("deadline",e.target.value)}/>
         </Field>
+
         <Field label="Localização" full>
           <input style={inp} value={form.location}
             onChange={e=>set("location",e.target.value)}
             placeholder="Ex: Uberlândia - MG"/>
         </Field>
+
         <Field label="Valor do Serviço (R$)" full>
           <input style={inp} type="number" min="0" step="0.01"
             value={form.value} onChange={e=>set("value",e.target.value)}
             placeholder="0,00"/>
         </Field>
+
         <Field label="Observações" full>
           <textarea style={{...inp,minHeight:72,resize:"vertical"}}
             value={form.notes} onChange={e=>set("notes",e.target.value)}
@@ -513,23 +609,21 @@ function KPICard({ icon, label, value, sub, color="#f1f5f9", highlight }) {
 
 function MonthlyChart({ data, maxVal }) {
   return(
-    <div style={{display:"flex",alignItems:"flex-end",gap:4,height:80,
-      padding:"0 4px"}}>
+    <div style={{display:"flex",alignItems:"flex-end",gap:4,height:80,padding:"0 4px"}}>
       {data.map((d,i)=>{
         const h = maxVal>0 ? Math.max((d.revenue/maxVal)*72, d.revenue>0?6:0) : 0;
-        const isCurrentMonth = d.month === new Date().getMonth()+1 &&
-          d.year === new Date().getFullYear();
+        const isCurrentMonth = d.month===new Date().getMonth()+1 &&
+          d.year===new Date().getFullYear();
         return(
           <div key={i} style={{flex:1,display:"flex",flexDirection:"column",
-            alignItems:"center",gap:3,position:"relative"}} title={`${MESES[d.month-1]}: ${fmt$(d.revenue)} · ${d.count} serv.`}>
+            alignItems:"center",gap:3}}
+            title={`${MESES[d.month-1]}: ${fmt$(d.revenue)} · ${d.count} serv.`}>
             <div style={{width:"100%",borderRadius:"3px 3px 0 0",
               background:isCurrentMonth
                 ?"linear-gradient(180deg,#f59e0b,#d97706)"
                 :d.revenue>0?"#1e3a5f":"#1f2937",
               height:h,transition:"height 0.6s ease",
-              boxShadow:isCurrentMonth?"0 0 8px #f59e0b60":"none",
-              minHeight:0}}>
-            </div>
+              boxShadow:isCurrentMonth?"0 0 8px #f59e0b60":"none"}}/>
             <div style={{fontSize:9,color:isCurrentMonth?"#f59e0b":"#4b5563",
               fontFamily:"'Space Mono',monospace",fontWeight:isCurrentMonth?700:400,
               lineHeight:1}}>
@@ -557,11 +651,12 @@ function SkeletonCard() {
 // ─── App ──────────────────────────────────────────────────
 
 export default function App() {
-  const now   = new Date();
-  const curY  = now.getFullYear();
-  const curM  = now.getMonth() + 1;
+  const now  = new Date();
+  const curY = now.getFullYear();
+  const curM = now.getMonth() + 1;
 
   const [services,     setServices]     = useState([]);
+  const [customTypes,  setCustomTypes]  = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [syncStatus,   setSyncStatus]   = useState("loading");
   const [modal,        setModal]        = useState(null);
@@ -572,14 +667,13 @@ export default function App() {
   const [sort,         setSort]         = useState("createdAt_desc");
   const [view,         setView]         = useState("cards");
   const [tab,          setTab]          = useState("servicos");
-
-  // Dashboard period
-  const [dashMode,     setDashMode]     = useState("mes");   // mes | ano | total
+  const [dashMode,     setDashMode]     = useState("mes");
   const [dashMonth,    setDashMonth]    = useState(curM);
   const [dashYear,     setDashYear]     = useState(curY);
 
   const { toasts, toast, remove } = useToast();
 
+  // Online/offline
   useEffect(()=>{
     const on=()=>setSyncStatus("synced");
     const off=()=>setSyncStatus("offline");
@@ -588,6 +682,7 @@ export default function App() {
     return()=>{ window.removeEventListener("online",on); window.removeEventListener("offline",off); };
   },[]);
 
+  // Listener serviços
   useEffect(()=>{
     if(!servicesCol){setSyncStatus("error");setLoading(false);return;}
     const q=query(servicesCol,orderBy("createdAt","desc"));
@@ -601,6 +696,36 @@ export default function App() {
     );
   },[]);
 
+  // Listener tipos personalizados
+  useEffect(()=>{
+    if(!db)return;
+    const ref = doc(db,"config","serviceTypes");
+    return onSnapshot(ref, snap=>{
+      if(snap.exists()) setCustomTypes(snap.data().types||[]);
+    }, ()=>{});
+  },[]);
+
+  // Salvar tipo personalizado no Firebase
+  const saveCustomType = useCallback(async(type)=>{
+    if(!db||!type.trim())return;
+    try{
+      const ref = doc(db,"config","serviceTypes");
+      const snap = await getDoc(ref);
+      const existing = snap.exists() ? (snap.data().types||[]) : [];
+      if(existing.includes(type.trim())){
+        toast(`"${type}" já existe na lista.`,"info");
+        return;
+      }
+      const updated = [...existing, type.trim()];
+      await setDoc(ref, {types:updated}, {merge:true});
+      toast(`Categoria "${type}" salva na lista! ✓`);
+    }catch(e){
+      console.error(e);
+      toast("Erro ao salvar categoria.","error");
+    }
+  },[toast]);
+
+  // CRUD serviços
   const saveService = useCallback(async form=>{
     setSaving(true);
     try{
@@ -654,21 +779,18 @@ export default function App() {
     });
   },[services,search,filterStatus,sort]);
 
-  // Anos disponíveis para seleção
   const availableYears = useMemo(()=>{
-    const yrs = new Set(services.map(s=>getServiceYear(s)).filter(Boolean));
+    const yrs=new Set(services.map(s=>getServiceYear(s)).filter(Boolean));
     yrs.add(curY);
     return [...yrs].sort((a,b)=>b-a);
   },[services,curY]);
 
-  // Serviços do período selecionado
   const periodServices = useMemo(()=>{
     if(dashMode==="total") return services;
     if(dashMode==="ano")   return services.filter(s=>getServiceYear(s)===dashYear);
     return services.filter(s=>getServiceYear(s)===dashYear&&getServiceMonth(s)===dashMonth);
   },[services,dashMode,dashYear,dashMonth]);
 
-  // Stats do período
   const stats = useMemo(()=>{
     return periodServices.reduce((acc,s)=>{
       acc.total++;
@@ -676,7 +798,7 @@ export default function App() {
       if(isOverdue(s))acc.atrasados++;
       if(["Aguardando","Em Campo","Em Escritório"].includes(s.status))acc.andamento++;
       const val=parseFloat(s.value)||0;
-      if(s.status!=="Cancelado"&&val>0){ acc.faturamento+=val; acc.comValor++; }
+      if(s.status!=="Cancelado"&&val>0){acc.faturamento+=val;acc.comValor++;}
       acc.byStatus[s.status]=(acc.byStatus[s.status]||0)+1;
       if(s.client){
         if(!acc.byClient[s.client])acc.byClient[s.client]={count:0,revenue:0};
@@ -693,38 +815,30 @@ export default function App() {
        byStatus:{},byClient:{},byType:{}});
   },[periodServices]);
 
-  const ticketMedio = stats.comValor>0 ? stats.faturamento/stats.comValor : 0;
-  const taxaConclusao = stats.total>0 ? Math.round(stats.concluidos/stats.total*100) : 0;
+  const ticketMedio    = stats.comValor>0 ? stats.faturamento/stats.comValor : 0;
+  const taxaConclusao  = stats.total>0 ? Math.round(stats.concluidos/stats.total*100) : 0;
 
-  // Top clientes
-  const topClientes = useMemo(()=>{
-    return Object.entries(stats.byClient)
-      .sort((a,b)=>b[1].revenue-a[1].revenue)
-      .slice(0,5);
-  },[stats]);
+  const topClientes = useMemo(()=>
+    Object.entries(stats.byClient).sort((a,b)=>b[1].revenue-a[1].revenue).slice(0,5)
+  ,[stats]);
 
-  // Gráfico mensal (12 meses do ano selecionado)
   const monthlyChart = useMemo(()=>{
-    const year = dashYear;
     return MESES.map((_,i)=>{
-      const m = i+1;
-      const svcs = services.filter(s=>getServiceYear(s)===year&&getServiceMonth(s)===m);
-      const revenue = svcs.filter(s=>s.status!=="Cancelado")
-        .reduce((a,s)=>a+(parseFloat(s.value)||0),0);
-      return { month:m, year, count:svcs.length, revenue };
+      const m=i+1;
+      const svcs=services.filter(s=>getServiceYear(s)===dashYear&&getServiceMonth(s)===m);
+      const revenue=svcs.filter(s=>s.status!=="Cancelado").reduce((a,s)=>a+(parseFloat(s.value)||0),0);
+      return {month:m,year:dashYear,count:svcs.length,revenue};
     });
   },[services,dashYear]);
 
   const maxMonthlyRevenue = useMemo(()=>Math.max(...monthlyChart.map(d=>d.revenue),1),[monthlyChart]);
 
-  // Período como texto
   const periodoLabel = useMemo(()=>{
     if(dashMode==="total") return "Todos os serviços";
     if(dashMode==="ano")   return `Ano ${dashYear}`;
     return `${MESES_FULL[dashMonth-1]} de ${dashYear}`;
   },[dashMode,dashYear,dashMonth]);
 
-  // Alertas: prazos nos próximos 7 dias
   const proximosPrazos = useMemo(()=>
     services.filter(s=>{
       if(!s.deadline||DONE.has(s.status))return false;
@@ -732,6 +846,12 @@ export default function App() {
       return d!==null&&d>=0&&d<=7;
     }).sort((a,b)=>(daysLeft(a.deadline)||0)-(daysLeft(b.deadline)||0))
   ,[services]);
+
+  // Todos os tipos para o filtro (fixos + custom)
+  const allTypesForFilter = useMemo(()=>{
+    const extras=(customTypes||[]).filter(t=>!SERVICE_TYPES.includes(t));
+    return [...SERVICE_TYPES.filter(t=>t!=="Outro"),...extras,"Outro"];
+  },[customTypes]);
 
   return(
     <>
@@ -813,7 +933,7 @@ export default function App() {
         <main style={{maxWidth:1100,margin:"0 auto",
           padding:"24px 16px 16px",position:"relative",zIndex:1}}>
 
-          {/* ── SERVIÇOS ── */}
+          {/* SERVIÇOS */}
           {tab==="servicos"&&(<>
             <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
               <div style={{flex:1,minWidth:160,position:"relative"}}>
@@ -847,7 +967,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Alerta prazos próximos */}
             {proximosPrazos.length>0&&(
               <div style={{background:"#1a1500",border:"1px solid #f59e0b40",
                 borderRadius:10,padding:"10px 16px",marginBottom:14,
@@ -953,10 +1072,9 @@ export default function App() {
             )}
           </>)}
 
-          {/* ── DASHBOARD ── */}
+          {/* DASHBOARD */}
           {tab==="dashboard"&&(
             <div>
-              {/* Header do dashboard */}
               <div style={{display:"flex",alignItems:"center",
                 justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:12}}>
                 <div>
@@ -967,10 +1085,7 @@ export default function App() {
                     {periodoLabel} · {stats.total} serviço{stats.total!==1?"s":""}
                   </div>
                 </div>
-
-                {/* Controles de período */}
                 <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                  {/* Modo */}
                   <div style={{display:"flex",gap:3,background:"#111827",
                     border:"1px solid #1f2937",borderRadius:9,padding:3}}>
                     {[["mes","Mensal"],["ano","Anual"],["total","Total"]].map(([m,l])=>(
@@ -984,8 +1099,6 @@ export default function App() {
                       </button>
                     ))}
                   </div>
-
-                  {/* Ano */}
                   {(dashMode==="mes"||dashMode==="ano")&&(
                     <select style={{...inp,width:"auto",background:"#111827",
                       cursor:"pointer",height:40,padding:"0 12px"}}
@@ -993,8 +1106,6 @@ export default function App() {
                       {availableYears.map(y=><option key={y} value={y}>{y}</option>)}
                     </select>
                   )}
-
-                  {/* Mês */}
                   {dashMode==="mes"&&(
                     <select style={{...inp,width:"auto",background:"#111827",
                       cursor:"pointer",height:40,padding:"0 12px"}}
@@ -1007,7 +1118,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* KPIs */}
               <div style={{display:"grid",
                 gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",
                 gap:12,marginBottom:20}}>
@@ -1023,61 +1133,48 @@ export default function App() {
                   color={stats.atrasados>0?"#ef4444":"#6b7280"}/>
               </div>
 
-              {/* Gráfico mensal + distribuição */}
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",
-                gap:12,marginBottom:12}}>
-
-                {/* Gráfico de faturamento mensal */}
-                <div style={{background:"#111827",border:"1px solid #1f2937",
-                  borderRadius:14,padding:"20px 20px 16px",gridColumn:"1 / -1"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",
-                    alignItems:"flex-start",marginBottom:16}}>
-                    <div>
-                      <h3 style={{fontSize:12,fontWeight:700,color:"#6b7280",
-                        fontFamily:"'Space Mono',monospace",letterSpacing:"0.1em",
-                        textTransform:"uppercase"}}>
-                        Faturamento por Mês — {dashYear}
-                      </h3>
-                      <div style={{fontSize:11,color:"#4b5563",
-                        fontFamily:"'Space Mono',monospace",marginTop:3}}>
-                        Barra âmbar = mês atual
-                      </div>
+              <div style={{background:"#111827",border:"1px solid #1f2937",
+                borderRadius:14,padding:"20px 20px 16px",marginBottom:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",
+                  alignItems:"flex-start",marginBottom:16}}>
+                  <div>
+                    <h3 style={{fontSize:12,fontWeight:700,color:"#6b7280",
+                      fontFamily:"'Space Mono',monospace",letterSpacing:"0.1em",
+                      textTransform:"uppercase"}}>
+                      Faturamento por Mês — {dashYear}
+                    </h3>
+                    <div style={{fontSize:11,color:"#4b5563",
+                      fontFamily:"'Space Mono',monospace",marginTop:3}}>
+                      Barra âmbar = mês atual
                     </div>
-                    <div style={{fontSize:13,fontWeight:800,color:"#10b981",
+                  </div>
+                  <div style={{fontSize:13,fontWeight:800,color:"#10b981",
+                    fontFamily:"'Space Mono',monospace",textAlign:"right"}}>
+                    {fmt$(monthlyChart.reduce((a,d)=>a+d.revenue,0))}
+                    <div style={{fontSize:10,color:"#6b7280",fontWeight:400}}>total {dashYear}</div>
+                  </div>
+                </div>
+                <MonthlyChart data={monthlyChart} maxVal={maxMonthlyRevenue}/>
+                <div style={{display:"flex",gap:4,marginTop:8}}>
+                  {monthlyChart.map((d,i)=>(
+                    <div key={i} style={{flex:1,textAlign:"center",
+                      fontSize:9,color:d.count>0?"#6b7280":"#1f2937",
                       fontFamily:"'Space Mono',monospace"}}>
-                      {fmt$(monthlyChart.reduce((a,d)=>a+d.revenue,0))}
-                      <div style={{fontSize:10,color:"#6b7280",fontWeight:400}}>total {dashYear}</div>
+                      {d.count>0?d.count:""}
                     </div>
-                  </div>
-                  <MonthlyChart data={monthlyChart} maxVal={maxMonthlyRevenue}/>
-
-                  {/* Linha de valores embaixo */}
-                  <div style={{display:"flex",gap:4,marginTop:8}}>
-                    {monthlyChart.map((d,i)=>(
-                      <div key={i} style={{flex:1,textAlign:"center",
-                        fontSize:9,color:d.count>0?"#6b7280":"#1f2937",
-                        fontFamily:"'Space Mono',monospace"}}>
-                        {d.count>0?d.count:""}
-                      </div>
-                    ))}
-                  </div>
+                  ))}
                 </div>
               </div>
 
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-                {/* Status */}
                 <div style={{background:"#111827",border:"1px solid #1f2937",
                   borderRadius:14,padding:"20px"}}>
                   <h3 style={{fontSize:12,fontWeight:700,color:"#6b7280",
                     fontFamily:"'Space Mono',monospace",letterSpacing:"0.1em",
-                    textTransform:"uppercase",marginBottom:16}}>
-                    Por Status
-                  </h3>
+                    textTransform:"uppercase",marginBottom:16}}>Por Status</h3>
                   {stats.total===0?(
                     <div style={{color:"#4b5563",fontSize:13,textAlign:"center",
-                      padding:16,fontFamily:"'Space Mono',monospace"}}>
-                      Sem dados no período.
-                    </div>
+                      padding:16,fontFamily:"'Space Mono',monospace"}}>Sem dados no período.</div>
                   ):Object.entries(STATUS_CONFIG).map(([status,cfg])=>{
                     const count=stats.byStatus[status]||0;
                     if(!count)return null;
@@ -1105,19 +1202,14 @@ export default function App() {
                   })}
                 </div>
 
-                {/* Top Clientes */}
                 <div style={{background:"#111827",border:"1px solid #1f2937",
                   borderRadius:14,padding:"20px"}}>
                   <h3 style={{fontSize:12,fontWeight:700,color:"#6b7280",
                     fontFamily:"'Space Mono',monospace",letterSpacing:"0.1em",
-                    textTransform:"uppercase",marginBottom:16}}>
-                    🏆 Top Clientes
-                  </h3>
+                    textTransform:"uppercase",marginBottom:16}}>🏆 Top Clientes</h3>
                   {topClientes.length===0?(
                     <div style={{color:"#4b5563",fontSize:13,textAlign:"center",
-                      padding:16,fontFamily:"'Space Mono',monospace"}}>
-                      Sem dados no período.
-                    </div>
+                      padding:16,fontFamily:"'Space Mono',monospace"}}>Sem dados no período.</div>
                   ):topClientes.map(([client,data],i)=>(
                     <div key={client} style={{display:"flex",
                       justifyContent:"space-between",alignItems:"center",
@@ -1133,9 +1225,7 @@ export default function App() {
                         <div>
                           <div style={{fontSize:13,fontWeight:600,color:"#f1f5f9",
                             maxWidth:130,whiteSpace:"nowrap",overflow:"hidden",
-                            textOverflow:"ellipsis"}}>
-                            {client}
-                          </div>
+                            textOverflow:"ellipsis"}}>{client}</div>
                           <div style={{fontSize:11,color:"#6b7280",
                             fontFamily:"'Space Mono',monospace"}}>
                             {data.count} serviço{data.count!==1?"s":""}
@@ -1151,46 +1241,39 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Por tipo de serviço */}
               <div style={{background:"#111827",border:"1px solid #1f2937",
                 borderRadius:14,padding:"20px"}}>
                 <h3 style={{fontSize:12,fontWeight:700,color:"#6b7280",
                   fontFamily:"'Space Mono',monospace",letterSpacing:"0.1em",
-                  textTransform:"uppercase",marginBottom:16}}>
-                  Por Tipo de Serviço
-                </h3>
+                  textTransform:"uppercase",marginBottom:16}}>Por Tipo de Serviço</h3>
                 {Object.keys(stats.byType).length===0?(
                   <div style={{color:"#4b5563",fontSize:13,textAlign:"center",
-                    padding:16,fontFamily:"'Space Mono',monospace"}}>
-                    Sem dados no período.
-                  </div>
+                    padding:16,fontFamily:"'Space Mono',monospace"}}>Sem dados no período.</div>
                 ):(
                   <div style={{display:"grid",
                     gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:8}}>
-                    {SERVICE_TYPES.map(type=>{
-                      const d=stats.byType[type];
-                      if(!d)return null;
-                      return(
-                        <div key={type} style={{display:"flex",
-                          justifyContent:"space-between",alignItems:"center",
-                          padding:"10px 14px",background:"#0f172a",
-                          borderRadius:10,border:"1px solid #1f2937"}}>
-                          <div>
-                            <div style={{fontSize:12,fontWeight:600,color:"#60a5fa"}}>{type}</div>
-                            <div style={{fontSize:11,color:"#6b7280",
-                              fontFamily:"'Space Mono',monospace"}}>
-                              {d.count} serviço{d.count!==1?"s":""}
-                            </div>
+                    {Object.entries(stats.byType)
+                      .sort((a,b)=>b[1].count-a[1].count)
+                      .map(([type,d])=>(
+                      <div key={type} style={{display:"flex",
+                        justifyContent:"space-between",alignItems:"center",
+                        padding:"10px 14px",background:"#0f172a",
+                        borderRadius:10,border:"1px solid #1f2937"}}>
+                        <div>
+                          <div style={{fontSize:12,fontWeight:600,color:"#60a5fa"}}>{type}</div>
+                          <div style={{fontSize:11,color:"#6b7280",
+                            fontFamily:"'Space Mono',monospace"}}>
+                            {d.count} serviço{d.count!==1?"s":""}
                           </div>
-                          {d.revenue>0&&(
-                            <div style={{fontSize:12,fontWeight:800,
-                              color:"#10b981",fontFamily:"'Space Mono',monospace"}}>
-                              {fmt$(d.revenue)}
-                            </div>
-                          )}
                         </div>
-                      );
-                    })}
+                        {d.revenue>0&&(
+                          <div style={{fontSize:12,fontWeight:800,
+                            color:"#10b981",fontFamily:"'Space Mono',monospace"}}>
+                            {fmt$(d.revenue)}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -1218,8 +1301,14 @@ export default function App() {
         </nav>
 
         <Modal open={!!modal} onClose={closeModal}>
-          <ServiceForm initial={modal==="new"?null:modal}
-            onSave={saveService} onClose={closeModal} saving={saving}/>
+          <ServiceForm
+            initial={modal==="new"?null:modal}
+            onSave={saveService}
+            onClose={closeModal}
+            saving={saving}
+            customTypes={customTypes}
+            onSaveType={saveCustomType}
+          />
         </Modal>
 
         <ConfirmModal open={!!confirm}
