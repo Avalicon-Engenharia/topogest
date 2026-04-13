@@ -37,9 +37,9 @@ const SERVICE_TYPES = [
   "Levantamento Topográfico","Georreferenciamento",
   "Locação de Obra","Perfil Longitudinal/Transversal",
   "Cadastro Técnico","Divisão de Gleba",
-  "Levantamento Batimétrico","Outro",
+  "Levantamento Batimétrico","Retificação de Área",
+  "Revisão de Serviço","Outro",
 ];
-
 const STATUS_CONFIG = {
   Aguardando:      { color:"#6b7280", bg:"#1f2937", icon:"⏳" },
   "Em Campo":      { color:"#f59e0b", bg:"#451a03", icon:"📡" },
