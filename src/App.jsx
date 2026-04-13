@@ -1,6 +1,6 @@
 // ============================================================
-//  TopoGest v3 — Gestão de Serviços de Topografia
-//  Melhorias: Toasts · Sort · Dashboard visual · Mobile nav
+//  TopoGest v4 — Gestão de Serviços de Topografia
+//  Dashboard: filtro mensal/anual · gráfico · top clientes
 // ============================================================
 
 import {
@@ -30,6 +30,8 @@ const firebaseApp  = isConfigured
 const db          = firebaseApp ? getFirestore(firebaseApp) : null;
 const servicesCol = db ? collection(db, "services") : null;
 
+// ─── Constantes ───────────────────────────────────────────
+
 const SERVICE_TYPES = [
   "Levantamento Planimétrico","Levantamento Altimétrico",
   "Levantamento Topográfico","Georreferenciamento",
@@ -49,6 +51,10 @@ const STATUS_CONFIG = {
 
 const DONE = new Set(["Concluído","Entregue","Cancelado"]);
 
+const MESES = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+const MESES_FULL = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho",
+                    "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+
 const SORT_OPTIONS = [
   { value:"createdAt_desc", label:"Mais recentes" },
   { value:"deadline_asc",   label:"Prazo próximo" },
@@ -56,6 +62,8 @@ const SORT_OPTIONS = [
   { value:"value_desc",     label:"Maior valor" },
   { value:"status_asc",     label:"Por status" },
 ];
+
+// ─── Helpers ──────────────────────────────────────────────
 
 const makeEmptyForm = () => ({
   name:"", client:"", type:"", status:"Aguardando",
@@ -82,6 +90,9 @@ const daysLeft = deadline => {
   if (!deadline) return null;
   return Math.ceil((new Date(deadline+"T00:00:00") - new Date()) / 86400000);
 };
+
+const getServiceYear  = s => s.date ? parseInt(s.date.slice(0,4)) : null;
+const getServiceMonth = s => s.date ? parseInt(s.date.slice(5,7)) : null;
 
 function useClickOutside(ref, fn) {
   useEffect(() => {
@@ -131,19 +142,18 @@ function useToast() {
   return { toasts, toast: add, remove };
 }
 
-// ─── Visuais ──────────────────────────────────────────────
+// ─── Componentes visuais ──────────────────────────────────
 
 const TopoLines = memo(() => (
   <svg style={{position:"fixed",inset:0,width:"100%",height:"100%",
-    opacity:0.04,pointerEvents:"none",zIndex:0}}
+    opacity:0.035,pointerEvents:"none",zIndex:0}}
     viewBox="0 0 800 600" preserveAspectRatio="xMidYMid slice" aria-hidden>
     {["M0,300 Q200,250 400,310 T800,290","M0,320 Q200,270 400,330 T800,310",
       "M0,340 Q200,290 400,350 T800,330","M0,360 Q200,310 400,370 T800,350",
-      "M0,380 Q200,330 400,390 T800,370","M0,280 Q200,230 400,290 T800,270",
-      "M0,260 Q200,210 400,270 T800,250","M0,240 Q200,190 400,250 T800,230",
-      "M0,220 Q200,170 400,230 T800,210","M0,400 Q200,350 400,410 T800,390",
+      "M0,280 Q200,230 400,290 T800,270","M0,260 Q200,210 400,270 T800,250",
+      "M0,240 Q200,190 400,250 T800,230","M0,400 Q200,350 400,410 T800,390",
     ].map((d,i)=>(
-      <path key={i} d={d} fill="none" stroke="#f59e0b" strokeWidth={i%5===0?"1.5":"0.8"}/>
+      <path key={i} d={d} fill="none" stroke="#f59e0b" strokeWidth={i%4===0?"1.5":"0.7"}/>
     ))}
   </svg>
 ));
@@ -185,16 +195,6 @@ function Badge({ status, onClick }) {
         backgroundColor:cfg.color,boxShadow:`0 0 6px ${cfg.color}`,flexShrink:0}}/>
       {status}
     </span>
-  );
-}
-
-function MiniBar({ value, max, color }) {
-  return (
-    <div style={{height:6,background:"#1f2937",borderRadius:3,overflow:"hidden",marginTop:5}}>
-      <div style={{height:"100%",borderRadius:3,background:color,
-        width:max>0?`${Math.min((value/max)*100,100)}%`:"0%",
-        transition:"width 0.8s ease",boxShadow:`0 0 8px ${color}60`}}/>
-    </div>
   );
 }
 
@@ -299,8 +299,6 @@ function ServiceForm({ initial, onSave, onClose, saving }) {
     if(Object.keys(e).length===0)onSave(form);
   };
 
-  const errStyle = k => errors[k]?{borderColor:"#ef4444"}:{};
-
   return(
     <>
       <div style={{display:"flex",justifyContent:"space-between",
@@ -316,20 +314,20 @@ function ServiceForm({ initial, onSave, onClose, saving }) {
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
         <Field label="Nome do Serviço" required full>
-          <input style={{...inp,...errStyle("name")}} value={form.name}
-            onChange={e=>set("name",e.target.value)}
+          <input style={{...inp,borderColor:errors.name?"#ef4444":"#1f2937"}}
+            value={form.name} onChange={e=>set("name",e.target.value)}
             placeholder="Ex: Levantamento Fazenda Santa Clara"/>
           {errors.name&&<div style={{fontSize:11,color:"#ef4444",marginTop:3}}>{errors.name}</div>}
         </Field>
         <Field label="Cliente" required full>
-          <input style={{...inp,...errStyle("client")}} value={form.client}
-            onChange={e=>set("client",e.target.value)}
+          <input style={{...inp,borderColor:errors.client?"#ef4444":"#1f2937"}}
+            value={form.client} onChange={e=>set("client",e.target.value)}
             placeholder="Nome do cliente ou empresa"/>
           {errors.client&&<div style={{fontSize:11,color:"#ef4444",marginTop:3}}>{errors.client}</div>}
         </Field>
         <Field label="Tipo de Serviço" required full>
-          <select style={{...inp,cursor:"pointer",...errStyle("type")}} value={form.type}
-            onChange={e=>set("type",e.target.value)}>
+          <select style={{...inp,cursor:"pointer",borderColor:errors.type?"#ef4444":"#1f2937"}}
+            value={form.type} onChange={e=>set("type",e.target.value)}>
             <option value="">Selecionar...</option>
             {SERVICE_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
           </select>
@@ -378,9 +376,8 @@ function ServiceForm({ initial, onSave, onClose, saving }) {
         <button onClick={handleSave} disabled={saving}
           style={{flex:2,padding:"12px 0",
             background:saving?"#1f2937":"linear-gradient(135deg,#d97706,#f59e0b)",
-            border:"none",borderRadius:10,
-            color:saving?"#4b5563":"#000",fontWeight:800,
-            cursor:saving?"not-allowed":"pointer",fontSize:14,
+            border:"none",borderRadius:10,color:saving?"#4b5563":"#000",
+            fontWeight:800,cursor:saving?"not-allowed":"pointer",fontSize:14,
             fontFamily:"'Space Mono',monospace",letterSpacing:"0.05em",
             transition:"all 0.2s"}}>
           {saving?"SALVANDO...":"SALVAR NA NUVEM ☁"}
@@ -390,15 +387,15 @@ function ServiceForm({ initial, onSave, onClose, saving }) {
   );
 }
 
-// ─── Card ─────────────────────────────────────────────────
+// ─── Card de serviço ──────────────────────────────────────
 
 function ServiceCard({ svc, onEdit, onDelete, onStatusChange, index }) {
   const [menu, setMenu] = useState(false);
-  const [hov, setHov] = useState(false);
+  const [hov, setHov]   = useState(false);
   const menuRef = useRef(null);
   const overdue = isOverdue(svc);
-  const days = daysLeft(svc.deadline);
-  const cfg = STATUS_CONFIG[svc.status]||STATUS_CONFIG["Aguardando"];
+  const days    = daysLeft(svc.deadline);
+  const cfg     = STATUS_CONFIG[svc.status]||STATUS_CONFIG["Aguardando"];
   useClickOutside(menuRef, ()=>setMenu(false));
 
   return(
@@ -408,7 +405,7 @@ function ServiceCard({ svc, onEdit, onDelete, onStatusChange, index }) {
       borderRadius:14,padding:"16px 18px",position:"relative",
       transition:"transform 0.2s,box-shadow 0.2s,border-color 0.2s",
       transform:hov?"translateY(-3px)":"none",
-      boxShadow:hov?`0 12px 32px rgba(0,0,0,0.5),0 0 0 1px ${cfg.color}20`:"none",
+      boxShadow:hov?`0 12px 32px rgba(0,0,0,0.5),0 0 0 1px ${cfg.color}18`:"none",
       animation:`fadeUp 0.35s ease ${index*35}ms both`}}
       onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}>
 
@@ -423,7 +420,6 @@ function ServiceCard({ svc, onEdit, onDelete, onStatusChange, index }) {
           <div style={{fontSize:12,color:"#6b7280",
             fontFamily:"'Space Mono',monospace"}}>👤 {svc.client}</div>
         </div>
-
         <div ref={menuRef} style={{position:"relative",flexShrink:0}}>
           <Badge status={svc.status} onClick={()=>setMenu(m=>!m)}/>
           {menu&&(
@@ -434,31 +430,25 @@ function ServiceCard({ svc, onEdit, onDelete, onStatusChange, index }) {
               {Object.entries(STATUS_CONFIG).map(([s,c])=>(
                 <button key={s} role="menuitem"
                   onClick={()=>{onStatusChange(svc.id,s);setMenu(false);}}
-                  style={{display:"flex",alignItems:"center",gap:8,
-                    width:"100%",padding:"9px 14px",
-                    background:svc.status===s?"#374151":"none",
-                    border:"none",color:c.color,fontSize:12,
-                    textAlign:"left",cursor:"pointer",
-                    fontFamily:"'Space Mono',monospace",fontWeight:600}}>
+                  style={{display:"flex",alignItems:"center",gap:8,width:"100%",
+                    padding:"9px 14px",background:svc.status===s?"#374151":"none",
+                    border:"none",color:c.color,fontSize:12,textAlign:"left",
+                    cursor:"pointer",fontFamily:"'Space Mono',monospace",fontWeight:600}}>
                   <span>{c.icon}</span>{s}
                 </button>
               ))}
               <div style={{height:1,background:"#374151"}}/>
-              <button role="menuitem"
-                onClick={()=>{onEdit(svc);setMenu(false);}}
-                style={{display:"flex",alignItems:"center",gap:8,
-                  width:"100%",padding:"9px 14px",background:"none",
-                  border:"none",color:"#f59e0b",fontSize:12,
-                  textAlign:"left",cursor:"pointer",
+              <button role="menuitem" onClick={()=>{onEdit(svc);setMenu(false);}}
+                style={{display:"flex",alignItems:"center",gap:8,width:"100%",
+                  padding:"9px 14px",background:"none",border:"none",color:"#f59e0b",
+                  fontSize:12,textAlign:"left",cursor:"pointer",
                   fontFamily:"'Space Mono',monospace",fontWeight:600}}>
                 ✎ Editar
               </button>
-              <button role="menuitem"
-                onClick={()=>{onDelete(svc.id,svc.name);setMenu(false);}}
-                style={{display:"flex",alignItems:"center",gap:8,
-                  width:"100%",padding:"9px 14px",background:"none",
-                  border:"none",color:"#ef4444",fontSize:12,
-                  textAlign:"left",cursor:"pointer",
+              <button role="menuitem" onClick={()=>{onDelete(svc.id,svc.name);setMenu(false);}}
+                style={{display:"flex",alignItems:"center",gap:8,width:"100%",
+                  padding:"9px 14px",background:"none",border:"none",color:"#ef4444",
+                  fontSize:12,textAlign:"left",cursor:"pointer",
                   fontFamily:"'Space Mono',monospace",fontWeight:600}}>
                 🗑 Excluir
               </button>
@@ -476,8 +466,7 @@ function ServiceCard({ svc, onEdit, onDelete, onStatusChange, index }) {
 
       <div style={{display:"flex",justifyContent:"space-between",
         alignItems:"center",paddingTop:10,borderTop:"1px solid #1f2937"}}>
-        <div style={{fontSize:11,color:"#6b7280",
-          fontFamily:"'Space Mono',monospace",lineHeight:1.6}}>
+        <div style={{fontSize:11,color:"#6b7280",fontFamily:"'Space Mono',monospace"}}>
           {fmtDate(svc.date)}
           {svc.deadline&&(
             <span style={{marginLeft:8,
@@ -501,42 +490,94 @@ function ServiceCard({ svc, onEdit, onDelete, onStatusChange, index }) {
   );
 }
 
-const StatCard = memo(({label,value,color,icon})=>(
-  <div style={{background:"#111827",border:"1px solid #1f2937",
-    borderRadius:14,padding:"18px 20px",position:"relative",overflow:"hidden"}}>
-    <div style={{position:"absolute",top:0,right:0,fontSize:52,
-      opacity:0.05,lineHeight:1,padding:8,userSelect:"none"}}>{icon}</div>
-    <div style={{fontSize:22,fontWeight:900,color,
-      fontFamily:"'Space Mono',monospace",letterSpacing:"-0.02em"}}>{value}</div>
-    <div style={{fontSize:11,color:"#6b7280",marginTop:4,
-      letterSpacing:"0.08em",textTransform:"uppercase"}}>{label}</div>
-  </div>
-));
+// ─── Dashboard ────────────────────────────────────────────
 
-const SkeletonCard = ()=>(
-  <div style={{background:"#111827",border:"1px solid #1f2937",
-    borderLeft:"3px solid #1f2937",borderRadius:14,padding:"16px 18px"}}>
-    {[[80,16],[50,12],[100,10],[60,11]].map(([w,h],i)=>(
-      <div key={i} style={{width:`${w}%`,height:h,background:"#1f2937",
-        borderRadius:6,marginBottom:10,animation:"pulse 1.5s infinite"}}/>
-    ))}
-  </div>
-);
+function KPICard({ icon, label, value, sub, color="#f1f5f9", highlight }) {
+  return(
+    <div style={{background: highlight?"linear-gradient(135deg,#1a2a1a,#111827)":"#111827",
+      border:`1px solid ${highlight?"#10b98140":"#1f2937"}`,
+      borderRadius:14,padding:"18px 20px",position:"relative",overflow:"hidden"}}>
+      <div style={{position:"absolute",top:0,right:0,fontSize:48,
+        opacity:0.06,lineHeight:1,padding:10}}>{icon}</div>
+      <div style={{fontSize:11,fontWeight:700,color:"#6b7280",
+        fontFamily:"'Space Mono',monospace",letterSpacing:"0.08em",
+        textTransform:"uppercase",marginBottom:8}}>{label}</div>
+      <div style={{fontSize:22,fontWeight:900,color,
+        fontFamily:"'Space Mono',monospace",letterSpacing:"-0.02em",
+        lineHeight:1.2}}>{value}</div>
+      {sub&&<div style={{fontSize:11,color:"#4b5563",marginTop:5,
+        fontFamily:"'Space Mono',monospace"}}>{sub}</div>}
+    </div>
+  );
+}
+
+function MonthlyChart({ data, maxVal }) {
+  return(
+    <div style={{display:"flex",alignItems:"flex-end",gap:4,height:80,
+      padding:"0 4px"}}>
+      {data.map((d,i)=>{
+        const h = maxVal>0 ? Math.max((d.revenue/maxVal)*72, d.revenue>0?6:0) : 0;
+        const isCurrentMonth = d.month === new Date().getMonth()+1 &&
+          d.year === new Date().getFullYear();
+        return(
+          <div key={i} style={{flex:1,display:"flex",flexDirection:"column",
+            alignItems:"center",gap:3,position:"relative"}} title={`${MESES[d.month-1]}: ${fmt$(d.revenue)} · ${d.count} serv.`}>
+            <div style={{width:"100%",borderRadius:"3px 3px 0 0",
+              background:isCurrentMonth
+                ?"linear-gradient(180deg,#f59e0b,#d97706)"
+                :d.revenue>0?"#1e3a5f":"#1f2937",
+              height:h,transition:"height 0.6s ease",
+              boxShadow:isCurrentMonth?"0 0 8px #f59e0b60":"none",
+              minHeight:0}}>
+            </div>
+            <div style={{fontSize:9,color:isCurrentMonth?"#f59e0b":"#4b5563",
+              fontFamily:"'Space Mono',monospace",fontWeight:isCurrentMonth?700:400,
+              lineHeight:1}}>
+              {MESES[d.month-1]}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SkeletonCard() {
+  return(
+    <div style={{background:"#111827",border:"1px solid #1f2937",
+      borderLeft:"3px solid #1f2937",borderRadius:14,padding:"16px 18px"}}>
+      {[[80,16],[50,12],[100,10],[60,11]].map(([w,h],i)=>(
+        <div key={i} style={{width:`${w}%`,height:h,background:"#1f2937",
+          borderRadius:6,marginBottom:10,animation:"pulse 1.5s infinite"}}/>
+      ))}
+    </div>
+  );
+}
 
 // ─── App ──────────────────────────────────────────────────
 
 export default function App() {
-  const [services,      setServices]      = useState([]);
-  const [loading,       setLoading]       = useState(true);
-  const [syncStatus,    setSyncStatus]    = useState("loading");
-  const [modal,         setModal]         = useState(null);
-  const [saving,        setSaving]        = useState(false);
-  const [confirm,       setConfirm]       = useState(null);
-  const [search,        setSearch]        = useState("");
-  const [filterStatus,  setFilterStatus]  = useState("Todos");
-  const [sort,          setSort]          = useState("createdAt_desc");
-  const [view,          setView]          = useState("cards");
-  const [tab,           setTab]           = useState("servicos");
+  const now   = new Date();
+  const curY  = now.getFullYear();
+  const curM  = now.getMonth() + 1;
+
+  const [services,     setServices]     = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [syncStatus,   setSyncStatus]   = useState("loading");
+  const [modal,        setModal]        = useState(null);
+  const [saving,       setSaving]       = useState(false);
+  const [confirm,      setConfirm]      = useState(null);
+  const [search,       setSearch]       = useState("");
+  const [filterStatus, setFilterStatus] = useState("Todos");
+  const [sort,         setSort]         = useState("createdAt_desc");
+  const [view,         setView]         = useState("cards");
+  const [tab,          setTab]          = useState("servicos");
+
+  // Dashboard period
+  const [dashMode,     setDashMode]     = useState("mes");   // mes | ano | total
+  const [dashMonth,    setDashMonth]    = useState(curM);
+  const [dashYear,     setDashYear]     = useState(curY);
+
   const { toasts, toast, remove } = useToast();
 
   useEffect(()=>{
@@ -562,7 +603,7 @@ export default function App() {
 
   const saveService = useCallback(async form=>{
     setSaving(true);
-    try {
+    try{
       const payload={...form,value:form.value!==""?parseFloat(form.value):""};
       if(form.id){
         const{id,createdAt,...data}=payload;
@@ -573,7 +614,7 @@ export default function App() {
         toast("Serviço criado! ✓");
       }
       setModal(null);
-    } catch(e){ console.error(e); toast("Erro ao salvar. Verifique a conexão.","error"); }
+    }catch(e){ console.error(e); toast("Erro ao salvar.","error"); }
     setSaving(false);
   },[toast]);
 
@@ -591,11 +632,12 @@ export default function App() {
     try{
       await updateDoc(doc(db,"services",id),{status,updatedAt:serverTimestamp()});
       toast(`Status → ${status}`);
-    }catch(e){ toast("Erro ao atualizar status.","error"); }
+    }catch(e){ toast("Erro ao atualizar.","error"); }
   },[toast]);
 
   const closeModal = useCallback(()=>{ if(!saving)setModal(null); },[saving]);
 
+  // Filtro lista
   const filtered = useMemo(()=>{
     const q=search.toLowerCase();
     let list=services.filter(s=>{
@@ -612,20 +654,84 @@ export default function App() {
     });
   },[services,search,filterStatus,sort]);
 
-  const stats = useMemo(()=>services.reduce((acc,s)=>{
-    acc.total++;
-    if(["Aguardando","Em Campo","Em Escritório"].includes(s.status))acc.pendentes++;
-    if(s.status==="Em Campo")acc.emCampo++;
-    if(isOverdue(s))acc.atrasados++;
-    if(s.status!=="Cancelado")acc.faturamento+=parseFloat(s.value)||0;
-    acc.byStatus[s.status]=(acc.byStatus[s.status]||0)+1;
-    if(s.type){
-      if(!acc.byType[s.type])acc.byType[s.type]={count:0,revenue:0};
-      acc.byType[s.type].count++;
-      if(s.status!=="Cancelado")acc.byType[s.type].revenue+=parseFloat(s.value)||0;
-    }
-    return acc;
-  },{total:0,pendentes:0,emCampo:0,atrasados:0,faturamento:0,byStatus:{},byType:{}}),[services]);
+  // Anos disponíveis para seleção
+  const availableYears = useMemo(()=>{
+    const yrs = new Set(services.map(s=>getServiceYear(s)).filter(Boolean));
+    yrs.add(curY);
+    return [...yrs].sort((a,b)=>b-a);
+  },[services,curY]);
+
+  // Serviços do período selecionado
+  const periodServices = useMemo(()=>{
+    if(dashMode==="total") return services;
+    if(dashMode==="ano")   return services.filter(s=>getServiceYear(s)===dashYear);
+    return services.filter(s=>getServiceYear(s)===dashYear&&getServiceMonth(s)===dashMonth);
+  },[services,dashMode,dashYear,dashMonth]);
+
+  // Stats do período
+  const stats = useMemo(()=>{
+    return periodServices.reduce((acc,s)=>{
+      acc.total++;
+      if(DONE.has(s.status))acc.concluidos++;
+      if(isOverdue(s))acc.atrasados++;
+      if(["Aguardando","Em Campo","Em Escritório"].includes(s.status))acc.andamento++;
+      const val=parseFloat(s.value)||0;
+      if(s.status!=="Cancelado"&&val>0){ acc.faturamento+=val; acc.comValor++; }
+      acc.byStatus[s.status]=(acc.byStatus[s.status]||0)+1;
+      if(s.client){
+        if(!acc.byClient[s.client])acc.byClient[s.client]={count:0,revenue:0};
+        acc.byClient[s.client].count++;
+        if(s.status!=="Cancelado")acc.byClient[s.client].revenue+=val;
+      }
+      if(s.type){
+        if(!acc.byType[s.type])acc.byType[s.type]={count:0,revenue:0};
+        acc.byType[s.type].count++;
+        if(s.status!=="Cancelado")acc.byType[s.type].revenue+=val;
+      }
+      return acc;
+    },{total:0,concluidos:0,atrasados:0,andamento:0,faturamento:0,comValor:0,
+       byStatus:{},byClient:{},byType:{}});
+  },[periodServices]);
+
+  const ticketMedio = stats.comValor>0 ? stats.faturamento/stats.comValor : 0;
+  const taxaConclusao = stats.total>0 ? Math.round(stats.concluidos/stats.total*100) : 0;
+
+  // Top clientes
+  const topClientes = useMemo(()=>{
+    return Object.entries(stats.byClient)
+      .sort((a,b)=>b[1].revenue-a[1].revenue)
+      .slice(0,5);
+  },[stats]);
+
+  // Gráfico mensal (12 meses do ano selecionado)
+  const monthlyChart = useMemo(()=>{
+    const year = dashYear;
+    return MESES.map((_,i)=>{
+      const m = i+1;
+      const svcs = services.filter(s=>getServiceYear(s)===year&&getServiceMonth(s)===m);
+      const revenue = svcs.filter(s=>s.status!=="Cancelado")
+        .reduce((a,s)=>a+(parseFloat(s.value)||0),0);
+      return { month:m, year, count:svcs.length, revenue };
+    });
+  },[services,dashYear]);
+
+  const maxMonthlyRevenue = useMemo(()=>Math.max(...monthlyChart.map(d=>d.revenue),1),[monthlyChart]);
+
+  // Período como texto
+  const periodoLabel = useMemo(()=>{
+    if(dashMode==="total") return "Todos os serviços";
+    if(dashMode==="ano")   return `Ano ${dashYear}`;
+    return `${MESES_FULL[dashMonth-1]} de ${dashYear}`;
+  },[dashMode,dashYear,dashMonth]);
+
+  // Alertas: prazos nos próximos 7 dias
+  const proximosPrazos = useMemo(()=>
+    services.filter(s=>{
+      if(!s.deadline||DONE.has(s.status))return false;
+      const d=daysLeft(s.deadline);
+      return d!==null&&d>=0&&d<=7;
+    }).sort((a,b)=>(daysLeft(a.deadline)||0)-(daysLeft(b.deadline)||0))
+  ,[services]);
 
   return(
     <>
@@ -707,7 +813,7 @@ export default function App() {
         <main style={{maxWidth:1100,margin:"0 auto",
           padding:"24px 16px 16px",position:"relative",zIndex:1}}>
 
-          {/* SERVIÇOS */}
+          {/* ── SERVIÇOS ── */}
           {tab==="servicos"&&(<>
             <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
               <div style={{flex:1,minWidth:160,position:"relative"}}>
@@ -741,18 +847,34 @@ export default function App() {
               </div>
             </div>
 
+            {/* Alerta prazos próximos */}
+            {proximosPrazos.length>0&&(
+              <div style={{background:"#1a1500",border:"1px solid #f59e0b40",
+                borderRadius:10,padding:"10px 16px",marginBottom:14,
+                display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <span style={{fontSize:14}}>⏰</span>
+                <span style={{fontSize:13,color:"#fcd34d",fontWeight:700}}>
+                  {proximosPrazos.length} serviço{proximosPrazos.length!==1?"s":""} com prazo nos próximos 7 dias:
+                </span>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {proximosPrazos.map(s=>(
+                    <span key={s.id} style={{fontSize:12,color:"#f59e0b",
+                      background:"#451a03",padding:"2px 8px",borderRadius:6,
+                      fontFamily:"'Space Mono',monospace"}}>
+                      {s.name.length>20?s.name.slice(0,20)+"...":s.name} ({daysLeft(s.deadline)}d)
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div style={{fontSize:11,color:"#4b5563",
               fontFamily:"'Space Mono',monospace",marginBottom:14,
-              letterSpacing:"0.08em",display:"flex",gap:16,alignItems:"center"}}>
+              letterSpacing:"0.08em",display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
               <span>{loading?"CARREGANDO...":`${filtered.length} SERVIÇO${filtered.length!==1?"S":""}`}</span>
-              {stats.atrasados>0&&(
+              {services.filter(isOverdue).length>0&&(
                 <span style={{color:"#ef4444",fontWeight:700}}>
-                  ⚠ {stats.atrasados} ATRASADO{stats.atrasados!==1?"S":""}
-                </span>
-              )}
-              {!loading&&stats.total>0&&(
-                <span style={{color:"#10b981"}}>
-                  💰 {fmt$(stats.faturamento)}
+                  ⚠ {services.filter(isOverdue).length} ATRASADO{services.filter(isOverdue).length!==1?"S":""}
                 </span>
               )}
             </div>
@@ -766,9 +888,7 @@ export default function App() {
                 color:"#4b5563",fontFamily:"'Space Mono',monospace"}}>
                 <div style={{fontSize:52,marginBottom:14,opacity:0.4}}>⬡</div>
                 <div style={{fontSize:14,marginBottom:6}}>
-                  {search||filterStatus!=="Todos"
-                    ?"Nenhum resultado para esse filtro"
-                    :"Nenhum serviço cadastrado ainda"}
+                  {search||filterStatus!=="Todos"?"Nenhum resultado":"Nenhum serviço cadastrado ainda"}
                 </div>
                 {!search&&filterStatus==="Todos"&&(
                   <button onClick={()=>setModal("new")}
@@ -833,95 +953,246 @@ export default function App() {
             )}
           </>)}
 
-          {/* DASHBOARD */}
+          {/* ── DASHBOARD ── */}
           {tab==="dashboard"&&(
             <div>
-              <h2 style={{fontSize:22,fontWeight:900,marginBottom:20,
-                color:"#f1f5f9",letterSpacing:"-0.02em"}}>Resumo Operacional</h2>
-
-              <div style={{display:"grid",
-                gridTemplateColumns:"repeat(auto-fill,minmax(155px,1fr))",
-                gap:12,marginBottom:20}}>
-                <StatCard label="Total" value={stats.total} color="#f1f5f9" icon="⬡"/>
-                <StatCard label="Em Andamento" value={stats.pendentes} color="#f59e0b" icon="🏗"/>
-                <StatCard label="Em Campo" value={stats.emCampo} color="#f59e0b" icon="📡"/>
-                <StatCard label="Atrasados" value={stats.atrasados}
-                  color={stats.atrasados>0?"#ef4444":"#6b7280"} icon="⚠"/>
-                <StatCard label="Faturamento" value={fmt$(stats.faturamento)} color="#10b981" icon="💰"/>
-              </div>
-
-              <div style={{background:"#111827",border:"1px solid #1f2937",
-                borderRadius:14,padding:"22px 24px",marginBottom:14}}>
-                <h3 style={{fontSize:12,fontWeight:700,color:"#6b7280",
-                  fontFamily:"'Space Mono',monospace",letterSpacing:"0.1em",
-                  textTransform:"uppercase",marginBottom:16}}>
-                  Distribuição por Status
-                </h3>
-                {stats.total===0?(
-                  <div style={{color:"#4b5563",fontSize:13,textAlign:"center",
-                    padding:16,fontFamily:"'Space Mono',monospace"}}>
-                    Nenhum serviço ainda.
+              {/* Header do dashboard */}
+              <div style={{display:"flex",alignItems:"center",
+                justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:12}}>
+                <div>
+                  <h2 style={{fontSize:22,fontWeight:900,color:"#f1f5f9",
+                    letterSpacing:"-0.02em",lineHeight:1.2}}>Resumo Operacional</h2>
+                  <div style={{fontSize:12,color:"#6b7280",
+                    fontFamily:"'Space Mono',monospace",marginTop:2}}>
+                    {periodoLabel} · {stats.total} serviço{stats.total!==1?"s":""}
                   </div>
-                ):Object.entries(STATUS_CONFIG).map(([status,cfg])=>{
-                  const count=stats.byStatus[status]||0;
-                  if(!count)return null;
-                  return(
-                    <div key={status} style={{marginBottom:14}}>
-                      <div style={{display:"flex",justifyContent:"space-between",
-                        marginBottom:4,fontSize:13}}>
-                        <span style={{display:"flex",alignItems:"center",
-                          gap:6,color:"#9ca3af"}}>
-                          <span>{cfg.icon}</span>{status}
-                        </span>
-                        <span style={{fontWeight:700,
-                          fontFamily:"'Space Mono',monospace",color:cfg.color}}>
-                          {count} ({Math.round(count/stats.total*100)}%)
-                        </span>
-                      </div>
-                      <MiniBar value={count} max={stats.total} color={cfg.color}/>
-                    </div>
-                  );
-                })}
+                </div>
+
+                {/* Controles de período */}
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  {/* Modo */}
+                  <div style={{display:"flex",gap:3,background:"#111827",
+                    border:"1px solid #1f2937",borderRadius:9,padding:3}}>
+                    {[["mes","Mensal"],["ano","Anual"],["total","Total"]].map(([m,l])=>(
+                      <button key={m} onClick={()=>setDashMode(m)}
+                        style={{padding:"5px 12px",borderRadius:7,border:"none",
+                          background:dashMode===m?"#f59e0b":"transparent",
+                          color:dashMode===m?"#000":"#9ca3af",
+                          fontWeight:700,cursor:"pointer",fontSize:12,
+                          fontFamily:"'Space Mono',monospace",transition:"all 0.15s"}}>
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Ano */}
+                  {(dashMode==="mes"||dashMode==="ano")&&(
+                    <select style={{...inp,width:"auto",background:"#111827",
+                      cursor:"pointer",height:40,padding:"0 12px"}}
+                      value={dashYear} onChange={e=>setDashYear(parseInt(e.target.value))}>
+                      {availableYears.map(y=><option key={y} value={y}>{y}</option>)}
+                    </select>
+                  )}
+
+                  {/* Mês */}
+                  {dashMode==="mes"&&(
+                    <select style={{...inp,width:"auto",background:"#111827",
+                      cursor:"pointer",height:40,padding:"0 12px"}}
+                      value={dashMonth} onChange={e=>setDashMonth(parseInt(e.target.value))}>
+                      {MESES_FULL.map((m,i)=>(
+                        <option key={i+1} value={i+1}>{m}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               </div>
 
+              {/* KPIs */}
+              <div style={{display:"grid",
+                gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",
+                gap:12,marginBottom:20}}>
+                <KPICard icon="📋" label="Serviços" value={stats.total}
+                  sub={`${stats.andamento} em andamento`}/>
+                <KPICard icon="💰" label="Faturamento" value={fmt$(stats.faturamento)}
+                  color="#10b981" highlight sub={`Ticket médio: ${fmt$(ticketMedio)}`}/>
+                <KPICard icon="✅" label="Concluídos" value={stats.concluidos}
+                  color="#10b981" sub={`${taxaConclusao}% taxa de conclusão`}/>
+                <KPICard icon="🏗" label="Em Andamento" value={stats.andamento}
+                  color="#f59e0b" sub={`${stats.atrasados} atrasado${stats.atrasados!==1?"s":""}`}/>
+                <KPICard icon="⚠" label="Atrasados" value={stats.atrasados}
+                  color={stats.atrasados>0?"#ef4444":"#6b7280"}/>
+              </div>
+
+              {/* Gráfico mensal + distribuição */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",
+                gap:12,marginBottom:12}}>
+
+                {/* Gráfico de faturamento mensal */}
+                <div style={{background:"#111827",border:"1px solid #1f2937",
+                  borderRadius:14,padding:"20px 20px 16px",gridColumn:"1 / -1"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",
+                    alignItems:"flex-start",marginBottom:16}}>
+                    <div>
+                      <h3 style={{fontSize:12,fontWeight:700,color:"#6b7280",
+                        fontFamily:"'Space Mono',monospace",letterSpacing:"0.1em",
+                        textTransform:"uppercase"}}>
+                        Faturamento por Mês — {dashYear}
+                      </h3>
+                      <div style={{fontSize:11,color:"#4b5563",
+                        fontFamily:"'Space Mono',monospace",marginTop:3}}>
+                        Barra âmbar = mês atual
+                      </div>
+                    </div>
+                    <div style={{fontSize:13,fontWeight:800,color:"#10b981",
+                      fontFamily:"'Space Mono',monospace"}}>
+                      {fmt$(monthlyChart.reduce((a,d)=>a+d.revenue,0))}
+                      <div style={{fontSize:10,color:"#6b7280",fontWeight:400}}>total {dashYear}</div>
+                    </div>
+                  </div>
+                  <MonthlyChart data={monthlyChart} maxVal={maxMonthlyRevenue}/>
+
+                  {/* Linha de valores embaixo */}
+                  <div style={{display:"flex",gap:4,marginTop:8}}>
+                    {monthlyChart.map((d,i)=>(
+                      <div key={i} style={{flex:1,textAlign:"center",
+                        fontSize:9,color:d.count>0?"#6b7280":"#1f2937",
+                        fontFamily:"'Space Mono',monospace"}}>
+                        {d.count>0?d.count:""}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+                {/* Status */}
+                <div style={{background:"#111827",border:"1px solid #1f2937",
+                  borderRadius:14,padding:"20px"}}>
+                  <h3 style={{fontSize:12,fontWeight:700,color:"#6b7280",
+                    fontFamily:"'Space Mono',monospace",letterSpacing:"0.1em",
+                    textTransform:"uppercase",marginBottom:16}}>
+                    Por Status
+                  </h3>
+                  {stats.total===0?(
+                    <div style={{color:"#4b5563",fontSize:13,textAlign:"center",
+                      padding:16,fontFamily:"'Space Mono',monospace"}}>
+                      Sem dados no período.
+                    </div>
+                  ):Object.entries(STATUS_CONFIG).map(([status,cfg])=>{
+                    const count=stats.byStatus[status]||0;
+                    if(!count)return null;
+                    return(
+                      <div key={status} style={{marginBottom:12}}>
+                        <div style={{display:"flex",justifyContent:"space-between",
+                          marginBottom:4,fontSize:12}}>
+                          <span style={{display:"flex",alignItems:"center",
+                            gap:5,color:"#9ca3af"}}>
+                            <span>{cfg.icon}</span>{status}
+                          </span>
+                          <span style={{fontWeight:700,
+                            fontFamily:"'Space Mono',monospace",color:cfg.color}}>
+                            {count} ({Math.round(count/stats.total*100)}%)
+                          </span>
+                        </div>
+                        <div style={{height:5,background:"#1f2937",borderRadius:3,overflow:"hidden"}}>
+                          <div style={{height:"100%",borderRadius:3,background:cfg.color,
+                            width:`${(count/stats.total)*100}%`,
+                            transition:"width 0.8s ease",
+                            boxShadow:`0 0 6px ${cfg.color}60`}}/>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Top Clientes */}
+                <div style={{background:"#111827",border:"1px solid #1f2937",
+                  borderRadius:14,padding:"20px"}}>
+                  <h3 style={{fontSize:12,fontWeight:700,color:"#6b7280",
+                    fontFamily:"'Space Mono',monospace",letterSpacing:"0.1em",
+                    textTransform:"uppercase",marginBottom:16}}>
+                    🏆 Top Clientes
+                  </h3>
+                  {topClientes.length===0?(
+                    <div style={{color:"#4b5563",fontSize:13,textAlign:"center",
+                      padding:16,fontFamily:"'Space Mono',monospace"}}>
+                      Sem dados no período.
+                    </div>
+                  ):topClientes.map(([client,data],i)=>(
+                    <div key={client} style={{display:"flex",
+                      justifyContent:"space-between",alignItems:"center",
+                      padding:"10px 0",
+                      borderBottom:i<topClientes.length-1?"1px solid #1f2937":"none"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <div style={{width:22,height:22,borderRadius:"50%",
+                          background:i===0?"#f59e0b":i===1?"#6b7280":"#374151",
+                          display:"flex",alignItems:"center",justifyContent:"center",
+                          fontSize:10,fontWeight:700,color:"#000",flexShrink:0}}>
+                          {i+1}
+                        </div>
+                        <div>
+                          <div style={{fontSize:13,fontWeight:600,color:"#f1f5f9",
+                            maxWidth:130,whiteSpace:"nowrap",overflow:"hidden",
+                            textOverflow:"ellipsis"}}>
+                            {client}
+                          </div>
+                          <div style={{fontSize:11,color:"#6b7280",
+                            fontFamily:"'Space Mono',monospace"}}>
+                            {data.count} serviço{data.count!==1?"s":""}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{fontSize:13,fontWeight:800,color:"#10b981",
+                        fontFamily:"'Space Mono',monospace",textAlign:"right"}}>
+                        {data.revenue>0?fmt$(data.revenue):"—"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Por tipo de serviço */}
               <div style={{background:"#111827",border:"1px solid #1f2937",
-                borderRadius:14,padding:"22px 24px"}}>
+                borderRadius:14,padding:"20px"}}>
                 <h3 style={{fontSize:12,fontWeight:700,color:"#6b7280",
                   fontFamily:"'Space Mono',monospace",letterSpacing:"0.1em",
                   textTransform:"uppercase",marginBottom:16}}>
                   Por Tipo de Serviço
                 </h3>
-                <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                  {Object.keys(stats.byType).length===0?(
-                    <div style={{color:"#4b5563",fontSize:13,textAlign:"center",
-                      padding:16,fontFamily:"'Space Mono',monospace"}}>
-                      Nenhum serviço ainda.
-                    </div>
-                  ):SERVICE_TYPES.map(type=>{
-                    const d=stats.byType[type];
-                    if(!d)return null;
-                    return(
-                      <div key={type} style={{display:"flex",
-                        justifyContent:"space-between",alignItems:"center",
-                        padding:"10px 14px",background:"#0f172a",
-                        borderRadius:10,border:"1px solid #1f2937"}}>
-                        <div>
-                          <div style={{fontSize:13,fontWeight:600,color:"#60a5fa"}}>{type}</div>
-                          <div style={{fontSize:11,color:"#6b7280",
-                            fontFamily:"'Space Mono',monospace"}}>
-                            {d.count} serviço{d.count!==1?"s":""}
+                {Object.keys(stats.byType).length===0?(
+                  <div style={{color:"#4b5563",fontSize:13,textAlign:"center",
+                    padding:16,fontFamily:"'Space Mono',monospace"}}>
+                    Sem dados no período.
+                  </div>
+                ):(
+                  <div style={{display:"grid",
+                    gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:8}}>
+                    {SERVICE_TYPES.map(type=>{
+                      const d=stats.byType[type];
+                      if(!d)return null;
+                      return(
+                        <div key={type} style={{display:"flex",
+                          justifyContent:"space-between",alignItems:"center",
+                          padding:"10px 14px",background:"#0f172a",
+                          borderRadius:10,border:"1px solid #1f2937"}}>
+                          <div>
+                            <div style={{fontSize:12,fontWeight:600,color:"#60a5fa"}}>{type}</div>
+                            <div style={{fontSize:11,color:"#6b7280",
+                              fontFamily:"'Space Mono',monospace"}}>
+                              {d.count} serviço{d.count!==1?"s":""}
+                            </div>
                           </div>
+                          {d.revenue>0&&(
+                            <div style={{fontSize:12,fontWeight:800,
+                              color:"#10b981",fontFamily:"'Space Mono',monospace"}}>
+                              {fmt$(d.revenue)}
+                            </div>
+                          )}
                         </div>
-                        {d.revenue>0&&(
-                          <div style={{fontSize:13,fontWeight:800,
-                            color:"#10b981",fontFamily:"'Space Mono',monospace"}}>
-                            {fmt$(d.revenue)}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           )}
